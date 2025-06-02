@@ -25,17 +25,20 @@ from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint
 
 from open_r1.configs import GRPOConfig
-from open_r1.rewards import (
-    accuracy_reward,
-    code_reward,
-    format_reward,
-    get_code_format_reward,
-    get_cosine_scaled_reward,
-    get_repetition_penalty_reward,
-    len_reward,
-    reasoning_steps_reward,
-    tag_count_reward,
-)
+# from open_r1.rewards import (
+#     accuracy_reward,
+#     code_reward,
+#     format_reward,
+#     get_code_format_reward,
+#     get_cosine_scaled_reward,
+#     get_repetition_penalty_reward,
+#     len_reward,
+#     reasoning_steps_reward,
+#     tag_count_reward,
+# )
+from open_r1.rpc_rewards import rpc_client
+from functools import partial
+
 from open_r1.utils import get_tokenizer
 from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
@@ -157,26 +160,51 @@ def main(script_args, training_args, model_args):
     tokenizer = get_tokenizer(model_args, training_args)
 
     # Get reward functions
+    # REWARD_FUNCS_REGISTRY = {
+    #     "accuracy": accuracy_reward,
+    #     "format": format_reward,
+    #     "reasoning_steps": reasoning_steps_reward,
+    #     "cosine": get_cosine_scaled_reward(
+    #         min_value_wrong=script_args.cosine_min_value_wrong,
+    #         max_value_wrong=script_args.cosine_max_value_wrong,
+    #         min_value_correct=script_args.cosine_min_value_correct,
+    #         max_value_correct=script_args.cosine_max_value_correct,
+    #         max_len=script_args.cosine_max_len,
+    #     ),
+    #     "repetition_penalty": get_repetition_penalty_reward(
+    #         ngram_size=script_args.repetition_n_grams,
+    #         max_penalty=script_args.repetition_max_penalty,
+    #     ),
+    #     "length": len_reward,
+    #     "code": code_reward,
+    #     "code_format": get_code_format_reward(language=script_args.code_language),
+    #     "tag_count": tag_count_reward,
+    # }
     REWARD_FUNCS_REGISTRY = {
-        "accuracy": accuracy_reward,
-        "format": format_reward,
-        "reasoning_steps": reasoning_steps_reward,
-        "cosine": get_cosine_scaled_reward(
-            min_value_wrong=script_args.cosine_min_value_wrong,
-            max_value_wrong=script_args.cosine_max_value_wrong,
-            min_value_correct=script_args.cosine_min_value_correct,
-            max_value_correct=script_args.cosine_max_value_correct,
-            max_len=script_args.cosine_max_len,
+        "accuracy": ("accuracy_reward", {}),
+        "format": ("format_reward", {}),
+        "reasoning_steps": ("reasoning_steps_reward", {}),
+        "cosine": ("cosine_scaled_reward", {
+            'min_value_wrong': script_args.cosine_min_value_wrong,
+            'max_value_wrong': script_args.cosine_max_value_wrong,
+            'min_value_correct': script_args.cosine_min_value_correct,
+            'max_value_correct': script_args.cosine_max_value_correct,
+            'max_len': script_args.cosine_max_len,}
         ),
-        "repetition_penalty": get_repetition_penalty_reward(
-            ngram_size=script_args.repetition_n_grams,
-            max_penalty=script_args.repetition_max_penalty,
+        "repetition_penalty": ('repetition_penalty_reward', {
+            'ngram_size': script_args.repetition_n_grams,
+            'max_penalty': script_args.repetition_max_penalty, }
         ),
-        "length": len_reward,
-        "code": code_reward,
-        "code_format": get_code_format_reward(language=script_args.code_language),
-        "tag_count": tag_count_reward,
+        "length": ('len_reward', {}),
+        "code": ('code_reward', {}),
+        "code_format": ('code_format_reward', {'language': script_args.code_language} ),
+        "tag_count": ('tag_count_reward', {}),
     }
+    # convert to partial rpc calls
+    REWARD_FUNCS_REGISTRY = {k: partial(rpc_client, base_url='http://localhost:6969', function_name=v[0], **v[1]) for k, v in REWARD_FUNCS_REGISTRY.items()}
+    for k, v in REWARD_FUNCS_REGISTRY.items():
+        v.__name__=k
+    # filtering as before
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
 
     # Format into conversation
